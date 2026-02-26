@@ -34,7 +34,28 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-## Быстрый старт
+## Веб-интерфейс
+
+Запустите Streamlit-приложение:
+
+```bash
+streamlit run app.py
+```
+
+Откроется браузер с полноценным интерфейсом:
+
+![Deribit Options Scanner UI](docs/screenshot.png)
+
+### Возможности интерфейса
+
+- **Боковая панель** — настройка фильтров (валюта, IV, Delta, DTE, объём, OI, API-ключи)
+- **Основной скан** — ликвидные опционы с таблицей, диаграммами IV vs Liquidity и DTE vs IV
+- **Высокая IV** — скан опционов для продажи волатильности с порогом IV Rank
+- **Iron Condor** — сетапы с 30–45 DTE и умеренной IV
+- **Арбитраж** — отклонения Put-Call Parity с визуализацией
+- **Экспорт в CSV** — скачивание результатов любого скана
+
+## Быстрый старт (CLI)
 
 ```python
 from scanner import DeribitOptionsScanner, OptionFilters
@@ -82,9 +103,12 @@ pytest tests/ -v
 
 ```
 Option-scan/
+├── app.py              # Streamlit веб-интерфейс
 ├── scanner.py          # Основной модуль сканера
 ├── requirements.txt    # Зависимости
 ├── .env.example        # Пример конфигурации
+├── docs/
+│   └── screenshot.png  # Скриншот интерфейса
 └── tests/
     └── test_scanner.py # Unit-тесты
 ```
