@@ -1,20 +1,29 @@
 @echo off
+setlocal
+cd /d "%~dp0"
+
 echo ============================================================
 echo  Option-scan — установка зависимостей (Windows)
 echo ============================================================
 
-:: Проверяем наличие Python
+:: Проверяем наличие Python (python или py launcher)
+set "PY_CMD="
 python --version >nul 2>&1
-if errorlevel 1 (
+if not errorlevel 1 set "PY_CMD=python"
+if not defined PY_CMD (
+    py -3 --version >nul 2>&1
+    if not errorlevel 1 set "PY_CMD=py -3"
+)
+if not defined PY_CMD (
     echo [ОШИБКА] Python не найден. Установите Python 3.8+ с https://python.org
     pause
     exit /b 1
 )
 
 :: Создаём виртуальное окружение, если его нет
-if not exist ".venv" (
+if not exist ".venv\Scripts\python.exe" (
     echo Создание виртуального окружения...
-    python -m venv .venv
+    %PY_CMD% -m venv .venv
     if errorlevel 1 (
         echo [ОШИБКА] Не удалось создать виртуальное окружение.
         pause
@@ -22,11 +31,22 @@ if not exist ".venv" (
     )
 )
 
-:: Активируем виртуальное окружение и устанавливаем зависимости
+:: Устанавливаем зависимости через python из venv
+set "VENV_PY=.venv\Scripts\python.exe"
+if not exist "%VENV_PY%" (
+    echo [ОШИБКА] Python в виртуальном окружении не найден.
+    pause
+    exit /b 1
+)
+
 echo Установка зависимостей...
-call .venv\Scripts\activate.bat
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+"%VENV_PY%" -m pip install --upgrade pip
+if errorlevel 1 (
+    echo [ОШИБКА] Не удалось обновить pip.
+    pause
+    exit /b 1
+)
+"%VENV_PY%" -m pip install -r requirements.txt
 if errorlevel 1 (
     echo [ОШИБКА] Не удалось установить зависимости.
     pause
