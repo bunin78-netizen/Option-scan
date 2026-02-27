@@ -117,6 +117,32 @@ def test_calculate_metrics_zero_underlying(scanner):
     assert metrics['in_the_money'] is False
 
 
+def test_calculate_metrics_long_short_risk_call(scanner):
+    row = {
+        'strike': 50000, 'volume': 5, 'open_interest': 20,
+        'iv': 0.6, 'delta': 0.7, 'gamma': 0.01, 'theta': -10, 'vega': 0.3,
+        'instrument_name': 'BTC-CALL', 'option_type': 'call', 'mark_price': 0.02
+    }
+    metrics = scanner.calculate_metrics(row, 50000)
+    assert metrics['premium_quote'] == pytest.approx(1000)
+    assert metrics['long_max_loss'] == pytest.approx(1000)
+    assert metrics['short_max_profit'] == pytest.approx(1000)
+    assert metrics['long_max_profit'] == float('inf')
+    assert metrics['short_max_loss'] == float('inf')
+
+
+def test_calculate_metrics_long_short_risk_put(scanner):
+    row = {
+        'strike': 45000, 'volume': 5, 'open_interest': 20,
+        'iv': 0.6, 'delta': -0.3, 'gamma': 0.01, 'theta': -10, 'vega': 0.3,
+        'instrument_name': 'BTC-PUT', 'option_type': 'put', 'mark_price': 0.01
+    }
+    metrics = scanner.calculate_metrics(row, 50000)
+    assert metrics['premium_quote'] == pytest.approx(500)
+    assert metrics['long_max_profit'] == pytest.approx(44500)
+    assert metrics['short_max_loss'] == pytest.approx(44500)
+
+
 # ---------------------------------------------------------------------------
 # _apply_filters
 # ---------------------------------------------------------------------------
@@ -185,6 +211,18 @@ def test_apply_filters_underlying_price_range(scanner):
     assert scanner._apply_filters(make_row(), filters, 30000) is False
 
 
+def test_parse_instrument_market_inverse(scanner):
+    parsed = scanner._parse_instrument_market("BTC-28JUN24-70000-C")
+    assert parsed["pair_type"] == "inverse"
+    assert parsed["quote_currency"] == "USD"
+
+
+def test_parse_instrument_market_non_inverse(scanner):
+    parsed = scanner._parse_instrument_market("BTC_USDC-28JUN24-70000-C")
+    assert parsed["pair_type"] == "non_inverse"
+    assert parsed["quote_currency"] == "USDC"
+
+
 # ---------------------------------------------------------------------------
 # get_instruments — mocked
 # ---------------------------------------------------------------------------
@@ -201,6 +239,18 @@ def test_get_instruments_non_list_returns_empty(scanner):
     with patch.object(scanner, '_get', return_value={'unexpected': True}):
         result = scanner.get_instruments('BTC')
         assert result == []
+
+
+def test_get_supported_option_currencies(scanner):
+    mocked = [
+        {"currency": "BTC", "kind": "option"},
+        {"currency": "ETH", "kind": "option"},
+        {"currency": "BTC", "kind": "future"},
+        {"currency": "XRP", "kind": "option"},
+    ]
+    with patch.object(scanner, '_get', return_value=mocked):
+        result = scanner.get_supported_option_currencies()
+        assert result == ["BTC", "ETH", "XRP"]
 
 
 # ---------------------------------------------------------------------------
