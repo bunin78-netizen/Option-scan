@@ -22,6 +22,7 @@ class OptionFilters:
     dte_max: int = 365
     min_liquidity_score: float = 0.0  # (volume * oi) / strike
     exclude_perpetual: bool = True
+    instrument_type: str = "all"  # all / inverse / non_inverse
     underlying_price_range: Tuple[float, float] = field(
         default_factory=lambda: (0, float('inf'))
     )  # фильтр по цене базового актива
@@ -61,6 +62,32 @@ class DeribitOptionsScanner:
         }
         result = self._get("/public/get_instruments", params)
         return result if isinstance(result, list) else []
+
+    def get_supported_option_currencies(self) -> List[str]:
+        """Список валют, для которых биржа отдает option-инструменты."""
+        result = self._get("/public/get_currencies")
+        if isinstance(result, list):
+            currencies = sorted({row.get("currency", "") for row in result if row.get("kind") == "option"})
+            return [c for c in currencies if c]
+        return ["BTC", "ETH"]
+
+    @staticmethod
+    def _parse_instrument_market(name: str) -> dict:
+        """Разобрать инструмент на тип рынка (инверсный/неинверсный) и котировку."""
+        market_token = name.split("-")[0] if name else ""
+        if "_" in market_token:
+            base, quote = market_token.split("_", 1)
+            return {
+                "base_currency": base,
+                "quote_currency": quote,
+                "pair_type": "non_inverse",
+            }
+
+        return {
+            "base_currency": market_token,
+            "quote_currency": "USD",
+            "pair_type": "inverse",
+        }
 
     def get_ticker_batch(self, instruments: List[str]) -> Dict[str, dict]:
         """Батчевое получение данных по тикерам (эффективнее одиночных запросов)"""
@@ -126,6 +153,23 @@ class DeribitOptionsScanner:
             metrics['moneyness'] = 0
             metrics['in_the_money'] = False
 
+        # Риск/прибыль (приближенно, для 1 контракта long/short)
+        mark_price = row.get('mark_price', 0)
+        premium_quote = mark_price * underlying_price if mark_price <= 1 else mark_price
+        premium_quote = float(max(premium_quote, 0))
+        option_type = row.get('option_type')
+
+        metrics['premium_quote'] = premium_quote
+        metrics['long_max_loss'] = premium_quote
+        metrics['short_max_profit'] = premium_quote
+
+        if option_type == 'call':
+            metrics['long_max_profit'] = float('inf')
+            metrics['short_max_loss'] = float('inf')
+        else:
+            metrics['long_max_profit'] = float(max(strike - premium_quote, 0))
+            metrics['short_max_loss'] = float(max(strike - premium_quote, 0))
+
         return metrics
 
     def _calculate_iv_rank(self, instrument: str, current_iv: float) -> float:
@@ -164,6 +208,13 @@ class DeribitOptionsScanner:
         if filters.exclude_perpetual:
             instruments = [i for i in instruments if not i['name'].endswith('-PERPETUAL')]
 
+        # Фильтр по типу пары (инверсная / неинверсная)
+        if filters.instrument_type in {"inverse", "non_inverse"}:
+            instruments = [
+                i for i in instruments
+                if self._parse_instrument_market(i["name"])["pair_type"] == filters.instrument_type
+            ]
+
         instrument_names = [i['name'] for i in instruments]
         print(f"Найдено инструментов: {len(instrument_names)}")
 
@@ -196,6 +247,9 @@ class DeribitOptionsScanner:
                 'iv': ticker.get('iv', 0),
                 'underlying_price': index_price
             }
+
+            market_info = self._parse_instrument_market(name)
+            row_data.update(market_info)
 
             # Расширенные метрики (передаём ticker + нужные поля)
             ticker_with_meta = dict(ticker)

@@ -36,21 +36,49 @@ st.caption("Сканер опционов в реальном времени н�
 
 st.sidebar.header("⚙️ Параметры сканирования")
 
-currency = st.sidebar.selectbox("Валюта", ["BTC", "ETH"], index=0)
+scan_mode = st.sidebar.radio(
+    "Режим",
+    ["Быстрый", "Продвинутый"],
+    help="Быстрый режим использует готовые значения, продвинутый открывает все настройки.",
+)
+
+available_currencies = DeribitOptionsScanner().get_supported_option_currencies()
+if not available_currencies:
+    available_currencies = ["BTC", "ETH"]
+
+currency_default_index = available_currencies.index("BTC") if "BTC" in available_currencies else 0
+currency = st.sidebar.selectbox("Валюта", available_currencies, index=currency_default_index)
+
+pair_type_ui = st.sidebar.selectbox(
+    "Тип пар",
+    ["Все", "Только инверсные", "Только неинверсные"],
+    index=0,
+)
+pair_type_map = {
+    "Все": "all",
+    "Только инверсные": "inverse",
+    "Только неинверсные": "non_inverse",
+}
+pair_type = pair_type_map[pair_type_ui]
 
 st.sidebar.subheader("Диапазоны фильтров")
 
+defaults = {
+    "Быстрый": {"iv_min": 0.25, "iv_max": 1.2, "delta_min": -0.35, "delta_max": 0.35, "dte_min": 7, "dte_max": 60},
+    "Продвинутый": {"iv_min": 0.2, "iv_max": 1.5, "delta_min": -0.5, "delta_max": 0.5, "dte_min": 7, "dte_max": 90},
+}
+
 col_iv1, col_iv2 = st.sidebar.columns(2)
-iv_min = col_iv1.number_input("IV мин", min_value=0.0, max_value=5.0, value=0.2, step=0.05)
-iv_max = col_iv2.number_input("IV макс", min_value=0.0, max_value=5.0, value=1.5, step=0.05)
+iv_min = col_iv1.number_input("IV мин", min_value=0.0, max_value=5.0, value=defaults[scan_mode]["iv_min"], step=0.05)
+iv_max = col_iv2.number_input("IV макс", min_value=0.0, max_value=5.0, value=defaults[scan_mode]["iv_max"], step=0.05)
 
 col_d1, col_d2 = st.sidebar.columns(2)
-delta_min = col_d1.number_input("Delta мин", min_value=-1.0, max_value=1.0, value=-0.5, step=0.05)
-delta_max = col_d2.number_input("Delta макс", min_value=-1.0, max_value=1.0, value=0.5, step=0.05)
+delta_min = col_d1.number_input("Delta мин", min_value=-1.0, max_value=1.0, value=defaults[scan_mode]["delta_min"], step=0.05)
+delta_max = col_d2.number_input("Delta макс", min_value=-1.0, max_value=1.0, value=defaults[scan_mode]["delta_max"], step=0.05)
 
 col_dte1, col_dte2 = st.sidebar.columns(2)
-dte_min = col_dte1.number_input("DTE мин", min_value=0, max_value=365, value=7, step=1)
-dte_max = col_dte2.number_input("DTE макс", min_value=0, max_value=730, value=90, step=1)
+dte_min = col_dte1.number_input("DTE мин", min_value=0, max_value=365, value=defaults[scan_mode]["dte_min"], step=1)
+dte_max = col_dte2.number_input("DTE макс", min_value=0, max_value=730, value=defaults[scan_mode]["dte_max"], step=1)
 
 min_volume = st.sidebar.number_input("Мин. объём (BTC)", min_value=0.0, value=2.0, step=0.5)
 min_oi = st.sidebar.number_input("Мин. открытый интерес (BTC)", min_value=0.0, value=20.0, step=5.0)
@@ -101,6 +129,7 @@ def build_filters() -> OptionFilters:
         dte_min=int(dte_min),
         dte_max=int(dte_max),
         exclude_perpetual=exclude_perp,
+        instrument_type=pair_type,
     )
 
 
@@ -110,14 +139,25 @@ def build_filters() -> OptionFilters:
 
 DISPLAY_COLS = [
     "instrument_name", "option_type", "strike", "dte",
+    "pair_type", "quote_currency",
     "iv", "delta", "gamma", "theta", "vega",
     "volume", "open_interest", "liquidity_score",
     "iv_rank", "moneyness", "spread_pct",
+    "premium_quote", "long_max_loss", "long_max_profit",
+    "short_max_profit", "short_max_loss",
 ]
 
 
 def get_available_columns(df: pd.DataFrame, cols: list) -> list:
     return [c for c in cols if c in df.columns]
+
+
+def _format_risk_reward_view(df: pd.DataFrame) -> pd.DataFrame:
+    view = df.copy()
+    for col in ["long_max_profit", "short_max_loss"]:
+        if col in view.columns:
+            view[col] = view[col].apply(lambda v: "∞" if pd.notna(v) and v == float("inf") else v)
+    return view
 
 
 def render_results(df: pd.DataFrame, scan_label: str, scanner_ref: DeribitOptionsScanner) -> None:
@@ -130,7 +170,7 @@ def render_results(df: pd.DataFrame, scan_label: str, scanner_ref: DeribitOption
     # ---- Table ----
     show_cols = get_available_columns(df, DISPLAY_COLS)
     st.dataframe(
-        df[show_cols].reset_index(drop=True),
+        _format_risk_reward_view(df[show_cols]).reset_index(drop=True),
         use_container_width=True,
         height=320,
     )
@@ -198,6 +238,7 @@ tab_general, tab_high_iv, tab_ic, tab_arb = st.tabs(
 
 with tab_general:
     st.subheader(f"Основной скан ликвидных опционов {currency}")
+    st.caption("Для каждой найденной возможности показываются приблизительные максимальные прибыль/убыток для long и short позиции (на 1 контракт).")
     if st.button("▶ Запустить скан", key="btn_general"):
         with st.spinner("Сканирование... (может занять несколько секунд)"):
             filters = build_filters()
