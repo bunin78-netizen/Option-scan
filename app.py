@@ -8,6 +8,7 @@ Run with:
 import os
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from dotenv import load_dotenv
@@ -245,12 +246,124 @@ def render_results(df: pd.DataFrame, scan_label: str, scanner_ref: DeribitOption
         st.plotly_chart(fig3, use_container_width=True)
 
 
+def _strategy_payoff(strategy: str, prices: np.ndarray, k1: float, p1: float, k2: float, p2: float) -> np.ndarray:
+    long_call = np.maximum(prices - k1, 0) - p1
+    short_call = p1 - np.maximum(prices - k1, 0)
+    long_put = np.maximum(k1 - prices, 0) - p1
+    short_put = p1 - np.maximum(k1 - prices, 0)
+
+    if strategy == "Long Call":
+        return long_call
+    if strategy == "Short Call":
+        return short_call
+    if strategy == "Long Put":
+        return long_put
+    if strategy == "Short Put":
+        return short_put
+    if strategy == "Long Straddle":
+        return (np.maximum(prices - k1, 0) - p1) + (np.maximum(k1 - prices, 0) - p2)
+    if strategy == "Short Straddle":
+        return (p1 - np.maximum(prices - k1, 0)) + (p2 - np.maximum(k1 - prices, 0))
+    if strategy == "Bull Call Spread":
+        return (np.maximum(prices - k1, 0) - p1) + (p2 - np.maximum(prices - k2, 0))
+    if strategy == "Bear Put Spread":
+        return (np.maximum(k2 - prices, 0) - p2) + (p1 - np.maximum(k1 - prices, 0))
+    if strategy == "Iron Condor":
+        put_width = max(abs(k1 - k2), 1.0)
+        call_short = k1 + put_width
+        call_long = k2 + put_width
+        return (
+            (p1 - np.maximum(k1 - prices, 0))
+            + (np.maximum(k2 - prices, 0) - p2)
+            + ((p1 * 0.8) - np.maximum(prices - call_short, 0))
+            + (np.maximum(prices - call_long, 0) - (p2 * 0.8))
+        )
+
+    return np.zeros_like(prices)
+
+
+def render_strategy_visualization(scanner_ref: DeribitOptionsScanner, currency_code: str) -> None:
+    st.subheader("📈 Графическое отображение стратегий")
+    st.caption("P/L на экспирации для 1 контракта в котируемой валюте.")
+
+    underlying_price = scanner_ref._get_index_price(currency_code)
+    if underlying_price <= 0:
+        st.warning("Не удалось получить цену базового актива. Проверьте подключение к Deribit API.")
+        return
+
+    strategy = st.selectbox(
+        "Стратегия",
+        [
+            "Long Call",
+            "Short Call",
+            "Long Put",
+            "Short Put",
+            "Long Straddle",
+            "Short Straddle",
+            "Bull Call Spread",
+            "Bear Put Spread",
+            "Iron Condor",
+        ],
+    )
+
+    c1, c2 = st.columns(2)
+    strike_1 = c1.number_input("Strike 1", min_value=1.0, value=float(round(underlying_price, 0)), step=50.0)
+    premium_1 = c2.number_input("Premium 1", min_value=0.0, value=float(round(underlying_price * 0.03, 2)), step=5.0)
+
+    c3, c4 = st.columns(2)
+    strike_2_default = float(round(underlying_price * 0.9, 0))
+    strike_2 = c3.number_input("Strike 2 (для спредов/комбинаций)", min_value=1.0, value=strike_2_default, step=50.0)
+    premium_2 = c4.number_input("Premium 2", min_value=0.0, value=float(round(underlying_price * 0.02, 2)), step=5.0)
+
+    min_price = max(1.0, underlying_price * 0.6)
+    max_price = underlying_price * 1.4
+    prices = np.linspace(min_price, max_price, 200)
+    payoff = _strategy_payoff(strategy, prices, strike_1, premium_1, strike_2, premium_2)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=prices,
+            y=payoff,
+            mode="lines",
+            line=dict(width=3, color="#2962FF"),
+            name="P/L",
+        )
+    )
+    fig.add_hline(y=0, line_dash="dash", line_color="gray")
+    fig.add_vline(x=underlying_price, line_dash="dot", line_color="green")
+    fig.update_layout(
+        title=f"{strategy}: профиль прибыли/убытка на экспирации",
+        xaxis_title=f"Цена базового актива ({currency_code})",
+        yaxis_title="P/L",
+        height=420,
+        margin=dict(l=20, r=20, t=60, b=20),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    max_profit = float(np.max(payoff))
+    max_loss = float(np.min(payoff))
+    break_even_prices = prices[np.where(np.diff(np.sign(payoff)) != 0)]
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Текущая цена", f"{underlying_price:,.2f}")
+    m2.metric("Макс. прибыль (модель)", f"{max_profit:,.2f}")
+    m3.metric("Макс. убыток (модель)", f"{max_loss:,.2f}")
+
+    if len(break_even_prices) > 0:
+        st.caption(
+            "Breakeven зоны (приближенно): " + ", ".join(f"{v:,.2f}" for v in break_even_prices[:4])
+        )
+    else:
+        st.caption("Breakeven точки не обнаружены в выбранном диапазоне цен.")
+
+
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
 
-tab_general, tab_high_iv, tab_ic, tab_arb = st.tabs(
-    ["🔍 Основной скан", "🔥 Высокая IV", "🦅 Iron Condor", "⚖️ Арбитраж"]
+tab_general, tab_high_iv, tab_ic, tab_arb, tab_strategy = st.tabs(
+    ["🔍 Основной скан", "🔥 Высокая IV", "🦅 Iron Condor", "⚖️ Арбитраж", "📈 Стратегии"]
 )
 
 # ===========================  GENERAL SCAN  =================================
@@ -324,6 +437,11 @@ with tab_arb:
                 file_name=f"arbitrage_{currency}.csv",
                 mime="text/csv",
             )
+
+# ===========================  STRATEGY VISUALIZER  ==========================
+
+with tab_strategy:
+    render_strategy_visualization(scanner, currency)
 
 # ---------------------------------------------------------------------------
 # Footer
